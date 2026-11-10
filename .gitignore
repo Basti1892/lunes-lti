@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+build/
+dist/
+
+# Local configuration and runtime data: key pair, token secret, SQLite database
+/config.toml
+/data/

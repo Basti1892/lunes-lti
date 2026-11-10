@@ -1,0 +1,96 @@
+# Registering Lunes in Moodle (LTI 1.3)
+
+Needs a site administrator. Tested target: Moodle 4.x. `<base>` is the `base_url` of the service:
+
+- Development: `http://localhost:8080` (webpack dev server of lunes-app, which proxies `/lti` to the service)
+- Test server: `https://lunes-app-test.tuerantuer.org`
+
+Use a separate registration (separate tool) per `<base>`; each gets its own client ID.
+
+## 1. Create the tool
+
+Site administration → Plugins → Activity modules → External tool → **Manage tools** → **configure a tool manually**.
+
+| Field                           | Value                                                                                  |
+| ------------------------------- | -------------------------------------------------------------------------------------- |
+| Tool name                       | Lunes (add "(dev)" for the development registration)                                   |
+| Tool URL                        | `<base>/lti/launch`                                                                    |
+| LTI version                     | LTI 1.3                                                                                |
+| Public key type                 | Server: **Keyset URL** → `<base>/lti/jwks`. Development: **RSA key**, see below        |
+| Initiate login URL              | `<base>/lti/login`                                                                     |
+| Redirection URI(s)              | `<base>/lti/launch`                                                                    |
+| Custom parameters               | empty (set per activity)                                                               |
+| Tool configuration usage        | Show in activity chooser and as a preconfigured tool                                   |
+| Default launch container        | Embed, without blocks (fallback: New window, see "Cookies" below)                      |
+| Supports Deep Linking           | off (comes later)                                                                      |
+
+**Services:** all "Do not use … " for now (AGS is switched on with grade passback).
+
+**Privacy** (data minimisation, NFR-04 / NFR-10):
+
+| Field                                  | Value |
+| -------------------------------------- | ----- |
+| Share launcher's name with tool        | Never |
+| Share launcher's email with tool       | Never |
+| Accept grades from the tool            | Never (until grade passback exists) |
+
+Moodle still sends its username (`ext` claim) and ID number (`lis` claim); the service drops these claims before
+storing anything.
+
+**RSA key for development:** Moodle cannot reach `http://localhost:8080/lti/jwks`. Print the public key with
+
+```bash
+flask --app lunes_lti public-key
+```
+
+and paste the output (`-----BEGIN PUBLIC KEY----- …`) into "Public key". For a plain launch Moodle does not need the
+key at all; it is used to verify messages of the tool (Deep Linking, AGS).
+
+## 2. Copy the platform details into `config.toml`
+
+Manage tools → the tool's **View configuration details** icon shows:
+
+| Moodle                     | `config.toml` (`[[platforms]]`) |
+| -------------------------- | ------------------------------- |
+| Platform ID                | `issuer`                        |
+| Client ID                  | `client_id`                     |
+| Deployment ID              | `deployment_ids = ["…"]`        |
+| Public keyset URL          | `key_set_url`                   |
+| Access token URL           | `auth_token_url`                |
+| Authentication request URL | `auth_login_url`                |
+
+Restart the service after changing the file.
+
+## 3. Add an activity
+
+In a course: Add an activity or resource → **Lunes** (or External tool → Preconfigured tool: Lunes) → **Show more…**
+→ **Custom parameters**:
+
+```
+job_id=<job ID>
+unit_id=<unit ID>
+```
+
+The IDs are in the URL of the web app: open the vocabulary set there, the URL is `/jobs/<job ID>/units/<unit ID>`.
+Deep Linking will replace this step with a picker.
+
+A launch redirects to `<base>/jobs/<job ID>/units/<unit ID>#lti_token=…`.
+
+## Cookies in the iframe
+
+The login sets two cookies (`lti1p3-session-id`, `lti1p3-state-…`) that the launch needs. They are `Secure`,
+`SameSite=None` and `Partitioned`, so they work in a cross-site iframe in browsers that partition third-party
+cookies. If a browser blocks them anyway, the login shows "Dein Browser erlaubt keine Cookies in eingebetteten
+Inhalten." with a link that opens Lunes in a new tab. If that happens often, set the launch container of the tool or
+the activity to "New window".
+
+## Development notes
+
+- `http://localhost` counts as a secure origin in Chrome, Edge and Firefox: the `Secure` cookies work, and the HTTPS
+  Moodle page may embed it without a mixed-content block. Use `localhost` everywhere (`base_url`, Moodle registration, browser), not a host name. Safari is
+  not supported for local development.
+- Chrome and Edge ask on the first launch whether moodle-lunes.tuerantuer.org may access other apps and services on
+  this device (German: "Auf andere Apps und Dienste auf diesem Gerät zugreifen"). This is Local Network Access: a
+  public site loads `localhost` in an iframe. Click "Allow" ("Zulassen"). If it was blocked by mistake, reset it in the
+  site settings of the Moodle page (lock icon in the address bar). Only development is affected; the deployed service
+  runs on a public host.

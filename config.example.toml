@@ -1,0 +1,22 @@
+# Configuration of lunes-lti. Copy to config.toml (git-ignored) and adjust.
+# Contains no secrets: the tool's key pair and the token secret are generated in data_dir on first start.
+
+# Origin that serves the web app and, below /lti, this service.
+# Development: the webpack dev server of lunes-app, which proxies /lti to this service.
+base_url = "http://localhost:8080"
+
+# Key pair, token secret and SQLite database. Relative paths are relative to this file.
+data_dir = "data"
+
+# Lifetime of the session token the app gets after a launch, in seconds
+token_lifetime = 7200
+
+# One entry per LMS registration. The values are shown by Moodle after registering the tool
+# (Site administration > Plugins > Activity modules > External tool > Manage tools > "View configuration details").
+[[platforms]]
+issuer = "https://moodle-lunes.tuerantuer.org"
+client_id = "<client ID from Moodle>"
+auth_login_url = "https://moodle-lunes.tuerantuer.org/mod/lti/auth.php"
+auth_token_url = "https://moodle-lunes.tuerantuer.org/mod/lti/token.php"
+key_set_url = "https://moodle-lunes.tuerantuer.org/mod/lti/certs.php"
+deployment_ids = ["<deployment ID from Moodle>"]
