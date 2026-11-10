@@ -26,6 +26,7 @@ CUSTOM_CLAIM = CLAIM + "custom"
 CONTEXT_CLAIM = CLAIM + "context"
 DEPLOYMENT_ID_CLAIM = CLAIM + "deployment_id"
 RESOURCE_LINK_CLAIM = CLAIM + "resource_link"
+LAUNCH_PRESENTATION_CLAIM = CLAIM + "launch_presentation"
 AGS_CLAIM = "https://purl.imsglobal.org/spec/lti-ags/claim/endpoint"
 
 # Claims that may identify a person. Moodle sends name and e-mail unless the privacy settings of the tool forbid it,

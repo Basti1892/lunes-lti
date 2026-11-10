@@ -2,13 +2,15 @@
 
 LTI 1.3 connector between learning management systems (Moodle first) and the
 [Lunes](https://github.com/digitalfabrik/lunes-app) web app. The LMS launches the tool, the service checks the launch
-and redirects into the web app with a short-lived session token. Background: ADRs 0013 and 0014 in the lunes-app
+and redirects into the web app with a short-lived session token. Background: ADRs 0013 to 0015 in the lunes-app
 repository (`docs/web/`).
 
 Endpoints, all below the origin of the web app:
 
 - `/lti/login`: OIDC login initiation, called by the LMS
 - `/lti/launch`: launch (redirect URI); redirects to `/jobs/<job_id>/units/<unit_id>#lti_token=<token>`
+- `/lti/session`: launch data for the app (`Authorization: Bearer <token>`): `jobId`, `unitId`, `returnUrl`,
+  `expiresAt`; `401` if the token is expired, invalid or missing
 - `/lti/jwks`: public key set of the tool
 
 ## Development setup (Windows, Git Bash)
@@ -43,5 +45,5 @@ Tests marked `keys` generate throwaway RSA keys; `pytest -m "not keys"` skips th
 ## Data
 
 The SQLite database holds nonce, state and the cached launch (for two hours, without name, e-mail, username or ID
-number) and per launch the pseudonymous user ID (`sub`), course, resource link, AGS line item and the selected job and
-unit.
+number) and per launch the pseudonymous user ID (`sub`), course, resource link, AGS line item, the return URL of the
+LMS and the selected job and unit.

@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS launches (
     resource_link_id TEXT NOT NULL,
     -- AGS line item, used for grade passback later
     lineitem TEXT,
+    -- Page of the LMS to return to (launch_presentation.return_url)
+    return_url TEXT,
     job_id INTEGER NOT NULL,
     unit_id INTEGER NOT NULL,
     created_at REAL NOT NULL,
@@ -51,6 +53,14 @@ def init_db(database_path: Path) -> None:
     with closing(connect(database_path)) as connection, connection:
         connection.execute("PRAGMA journal_mode=WAL")
         connection.executescript(SCHEMA)
+        _migrate(connection)
+
+
+def _migrate(connection: sqlite3.Connection) -> None:
+    """Adds columns introduced after the first version to an existing database."""
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(launches)")}
+    if "return_url" not in columns:
+        connection.execute("ALTER TABLE launches ADD COLUMN return_url TEXT")
 
 
 class SqliteLaunchDataStorage(LaunchDataStorage[t.Any]):
@@ -98,6 +108,7 @@ class Launch:
     context_id: str | None
     resource_link_id: str
     lineitem: str | None
+    return_url: str | None
     job_id: int
     unit_id: int
     created_at: float

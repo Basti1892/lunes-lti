@@ -1,9 +1,10 @@
 """LTI endpoints: OIDC login initiation, launch, JWKS."""
 
 import logging
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
-from flask import Blueprint, current_app, redirect, render_template
+import jwt
+from flask import Blueprint, current_app, jsonify, redirect, render_template, request
 from pylti1p3.exception import LtiException, OIDCException
 from pylti1p3.registration import Registration
 
@@ -45,6 +46,10 @@ def login():
     except (LtiException, OIDCException) as error:
         logger.warning("LTI login failed: %s", error)
         return _error("Der Start aus der Lernplattform ist fehlgeschlagen.")
+
+
+def _http_url(value) -> str | None:
+    return value if isinstance(value, str) and urlparse(value).scheme in ("http", "https") else None
 
 
 def _positive_int(value) -> int | None:
@@ -90,6 +95,7 @@ def launch():
         context_id=(launch_data.get(lti.CONTEXT_CLAIM) or {}).get("id"),
         resource_link_id=launch_data[lti.RESOURCE_LINK_CLAIM]["id"],
         lineitem=(launch_data.get(lti.AGS_CLAIM) or {}).get("lineitem"),
+        return_url=_http_url((launch_data.get(lti.LAUNCH_PRESENTATION_CLAIM) or {}).get("return_url")),
         job_id=job_id,
         unit_id=unit_id,
     )
@@ -97,6 +103,42 @@ def launch():
 
     # The token goes into the fragment: browsers do not send it to servers, so it does not end up in access logs
     return redirect(f"{state.config.base_url}/jobs/{job_id}/units/{unit_id}#lti_token={quote(token)}")
+
+
+@bp.get("/session")
+def session():
+    """Launch the app belongs to, for the session token in ``Authorization: Bearer <token>``.
+
+    401 with ``{"error": "expired"}`` tells the app that the activity has to be started again from the LMS (FR-11).
+    """
+    scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return _json_error("missing", 401)
+    try:
+        launch_id = session_token.verify(_state().token_secret, token)
+    except jwt.ExpiredSignatureError:
+        return _json_error("expired", 401)
+    except jwt.InvalidTokenError:
+        return _json_error("invalid", 401)
+
+    launch = storage.get_launch(_state().config.database_path, launch_id)
+    if launch is None:
+        return _json_error("expired", 401)
+
+    response = jsonify(
+        jobId=launch.job_id,
+        unitId=launch.unit_id,
+        returnUrl=launch.return_url,
+        expiresAt=int(launch.expires_at),
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _json_error(error: str, status: int):
+    response = jsonify(error=error)
+    response.headers["Cache-Control"] = "no-store"
+    return response, status
 
 
 @bp.get("/jwks")

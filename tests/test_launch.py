@@ -82,6 +82,7 @@ def id_token(platform_key, nonce, custom=None):
         lti.RESOURCE_LINK_CLAIM: {"id": "resource-1"},
         lti.CONTEXT_CLAIM: {"id": "course-1", "title": "Kurs"},
         lti.AGS_CLAIM: {"lineitem": f"{ISSUER}/lineitems/1"},
+        lti.LAUNCH_PRESENTATION_CLAIM: {"return_url": f"{ISSUER}/course/view.php?id=1"},
         lti.CUSTOM_CLAIM: {"job_id": "3", "unit_id": "7"} if custom is None else custom,
     }
     private_pem = platform_key.export_to_pem(private_key=True, password=None)
@@ -136,6 +137,7 @@ def test_launch_redirects_into_the_app_and_stores_no_personal_data(app, platform
     launch = storage.get_launch(state.config.database_path, launch_id)
     assert (launch.subject, launch.context_id, launch.resource_link_id) == ("user-42", "course-1", "resource-1")
     assert launch.lineitem == f"{ISSUER}/lineitems/1"
+    assert launch.return_url == f"{ISSUER}/course/view.php?id=1"
     assert (launch.job_id, launch.unit_id) == (3, 7)
 
     database = state.config.database_path.read_bytes()
