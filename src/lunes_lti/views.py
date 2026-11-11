@@ -1,14 +1,16 @@
 """LTI endpoints: OIDC login initiation, launch, JWKS."""
 
+import html
+import json
 import logging
+import re
 from urllib.parse import quote, urlparse
 
 import jwt
 from flask import Blueprint, current_app, jsonify, redirect, render_template, request
-from pylti1p3.exception import LtiException, OIDCException
-from pylti1p3.registration import Registration
+from pylti1p3.exception import LtiException, LtiServiceException, OIDCException
 
-from . import lti, session_token, storage
+from . import grades, lti, session_token, storage
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +97,7 @@ def launch():
         context_id=(launch_data.get(lti.CONTEXT_CLAIM) or {}).get("id"),
         resource_link_id=launch_data[lti.RESOURCE_LINK_CLAIM]["id"],
         lineitem=(launch_data.get(lti.AGS_CLAIM) or {}).get("lineitem"),
+        ags_endpoint=json.dumps(launch_data[lti.AGS_CLAIM]) if lti.AGS_CLAIM in launch_data else None,
         return_url=_http_url((launch_data.get(lti.LAUNCH_PRESENTATION_CLAIM) or {}).get("return_url")),
         job_id=job_id,
         unit_id=unit_id,
@@ -111,19 +114,9 @@ def session():
 
     401 with ``{"error": "expired"}`` tells the app that the activity has to be started again from the LMS (FR-11).
     """
-    scheme, _, token = request.headers.get("Authorization", "").partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        return _json_error("missing", 401)
-    try:
-        launch_id = session_token.verify(_state().token_secret, token)
-    except jwt.ExpiredSignatureError:
-        return _json_error("expired", 401)
-    except jwt.InvalidTokenError:
-        return _json_error("invalid", 401)
-
-    launch = storage.get_launch(_state().config.database_path, launch_id)
+    launch, error = _launch_from_token()
     if launch is None:
-        return _json_error("expired", 401)
+        return _json_error(error, 401)
 
     response = jsonify(
         jobId=launch.job_id,
@@ -135,6 +128,79 @@ def session():
     return response
 
 
+MAX_WORDS = 1000
+
+
+@bp.post("/results")
+def results():
+    """Result of a finished exercise, sent by the app: ``{"correct": <int>, "total": <int>}`` (FR-03, FR-12).
+
+    Answers 204 when the LMS accepted the grade, 401 like ``/lti/session``, 409 ``not_graded`` if the activity does
+    not accept grades, 422 for an invalid result and 502 ``lms_error`` if the LMS rejected the grade.
+    """
+    launch, error = _launch_from_token()
+    if launch is None:
+        return _json_error(error, 401)
+
+    body = request.get_json(silent=True)
+    correct = body.get("correct") if isinstance(body, dict) else None
+    total = body.get("total") if isinstance(body, dict) else None
+    is_valid = (
+        all(isinstance(value, int) and not isinstance(value, bool) for value in (correct, total))
+        and 0 < total <= MAX_WORDS
+        and 0 <= correct <= total
+    )
+    if not is_valid:
+        return _json_error("invalid_result", 422)
+
+    state = _state()
+    try:
+        grades.send_result(state.tool_conf, state.public_key, launch, grades.ExerciseResult(correct, total))
+    except grades.GradesNotAccepted:
+        return _json_error("not_graded", 409)
+    except LtiServiceException as error:
+        logger.warning("LMS rejected the grade: %s", describe_lms_error(error.response))
+        return _json_error("lms_error", 502)
+    return "", 204
+
+
+MAX_ERROR_LENGTH = 300
+
+
+def describe_lms_error(response) -> str:
+    """Short description of an error response of the LMS for the log.
+
+    Not the whole response: error pages of Moodle are long HTML pages that contain a session key.
+    """
+    url = urlparse(response.url)
+    text = response.text or ""
+    detail = ""
+    try:
+        body = json.loads(text)
+        if isinstance(body, dict):
+            detail = " ".join(str(body[key]) for key in ("error", "error_description", "reason") if key in body)
+    except ValueError:
+        # Moodle's error page shows the message in <p class="errormessage">
+        match = re.search(r'<p class="errormessage">(.*?)</p>', text, re.DOTALL)
+        detail = html.unescape(re.sub(r"<[^>]+>", "", match.group(1))).strip() if match else ""
+    return f"{response.status_code} {url.scheme}://{url.netloc}{url.path}: {detail[:MAX_ERROR_LENGTH]}"
+
+
+def _launch_from_token() -> tuple[storage.Launch | None, str]:
+    """Launch of the session token in ``Authorization: Bearer <token>``, or ``None`` with the reason."""
+    scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None, "missing"
+    try:
+        launch_id = session_token.verify(_state().token_secret, token)
+    except jwt.ExpiredSignatureError:
+        return None, "expired"
+    except jwt.InvalidTokenError:
+        return None, "invalid"
+    launch = storage.get_launch(_state().config.database_path, launch_id)
+    return (launch, "") if launch is not None else (None, "expired")
+
+
 def _json_error(error: str, status: int):
     response = jsonify(error=error)
     response.headers["Cache-Control"] = "no-store"
@@ -144,4 +210,4 @@ def _json_error(error: str, status: int):
 @bp.get("/jwks")
 def jwks():
     """Public key set of the tool."""
-    return {"keys": [Registration.get_jwk(_state().public_key)]}
+    return {"keys": [grades.public_jwk(_state().public_key)]}

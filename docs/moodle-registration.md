@@ -24,7 +24,13 @@ Site administration → Plugins → Activity modules → External tool → **Man
 | Default launch container        | Embed, without blocks (fallback: New window, see "Cookies" below)                      |
 | Supports Deep Linking           | off (comes later)                                                                      |
 
-**Services:** all "Do not use … " for now (AGS is switched on with grade passback).
+**Services:**
+
+| Service                                  | Value                       |
+| ---------------------------------------- | --------------------------- |
+| IMS LTI Assignment and Grade Services    | Use this service for grade sync only |
+| IMS LTI Names and Role Provisioning      | Do not use this service     |
+| Tool Settings                            | Do not use this service     |
 
 **Privacy** (data minimisation, NFR-04 / NFR-10):
 
@@ -32,7 +38,7 @@ Site administration → Plugins → Activity modules → External tool → **Man
 | -------------------------------------- | ----- |
 | Share launcher's name with tool        | Never |
 | Share launcher's email with tool       | Never |
-| Accept grades from the tool            | Never (until grade passback exists) |
+| Accept grades from the tool            | Always (or "Delegate to teacher") |
 
 Moodle still sends its username (`ext` claim) and ID number (`lis` claim); the service drops these claims before
 storing anything.
@@ -43,8 +49,20 @@ storing anything.
 flask --app lunes_lti public-key
 ```
 
-and paste the output (`-----BEGIN PUBLIC KEY----- …`) into "Public key". For a plain launch Moodle does not need the
-key at all; it is used to verify messages of the tool (Deep Linking, AGS).
+and paste the output (`-----BEGIN PUBLIC KEY----- …`) into "Public key". A plain launch works without the key, but
+grades do not: Moodle checks the tool's token request with it. With "Keyset URL" pointing to localhost, Moodle cannot
+fetch the key and answers the token request with `404` and the error `fix_jwks_alg(): Argument #1 ($jwks) must be of
+type array, null given` (logged by lunes-lti as "LMS rejected the grade"). The key changes only if `data/` is deleted;
+then paste it again.
+
+Copy the key without the terminal window, which tends to add spaces or drop line breaks: in Git Bash
+`flask --app lunes_lti public-key | clip`, then paste into the field. If the field does not start with
+`-----BEGIN PUBLIC KEY-----` and end with `-----END PUBLIC KEY-----`, Moodle answers the token request with
+`400 OpenSSL error: … DECODER routines::unsupported`.
+
+If the token request succeeds but sending the score fails with `401 Unauthorized` at `mod/lti/services.php/…/scores`,
+the web server does not pass the `Authorization` header to PHP. With Apache and PHP-FPM (`proxy_fcgi`), the Moodle
+administrators need `CGIPassAuth On` for the Moodle directory.
 
 ## 2. Copy the platform details into `config.toml`
 
@@ -75,6 +93,13 @@ The IDs are in the URL of the web app: open the vocabulary set there, the URL is
 Deep Linking will replace this step with a picker.
 
 A launch redirects to `<base>/jobs/<job ID>/units/<unit ID>#lti_token=…`.
+
+**Grade** (same form, section "Grade"): type "Point", maximum grade e.g. 100. Lunes sends the words correct on the
+first try out of all words of the word choice exercise; Moodle scales that to the maximum grade (6 of 8 → 75). Every
+finished attempt is sent, the gradebook shows the latest.
+
+After switching on the grade service or "Accept grades", launch the activity again: only new launches carry the AGS
+claim. Results of older launches are answered with `409 not_graded`.
 
 ## Cookies in the iframe
 

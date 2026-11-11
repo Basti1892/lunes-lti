@@ -81,7 +81,10 @@ def id_token(platform_key, nonce, custom=None):
         lti.CLAIM + "target_link_uri": f"{TOOL_URL}/lti/launch",
         lti.RESOURCE_LINK_CLAIM: {"id": "resource-1"},
         lti.CONTEXT_CLAIM: {"id": "course-1", "title": "Kurs"},
-        lti.AGS_CLAIM: {"lineitem": f"{ISSUER}/lineitems/1"},
+        lti.AGS_CLAIM: {
+            "scope": ["https://purl.imsglobal.org/spec/lti-ags/scope/score"],
+            "lineitem": f"{ISSUER}/lineitems/1/lineitem?type_id=1",
+        },
         lti.LAUNCH_PRESENTATION_CLAIM: {"return_url": f"{ISSUER}/course/view.php?id=1"},
         lti.CUSTOM_CLAIM: {"job_id": "3", "unit_id": "7"} if custom is None else custom,
     }
@@ -93,6 +96,7 @@ def test_jwks_publishes_only_the_public_key(app):
     keys = app.test_client().get("/lti/jwks").get_json()["keys"]
     assert len(keys) == 1
     assert keys[0]["kty"] == "RSA" and keys[0]["alg"] == "RS256" and keys[0]["use"] == "sig"
+    assert keys[0]["kid"]
     assert "d" not in keys[0]
 
 
@@ -136,7 +140,7 @@ def test_launch_redirects_into_the_app_and_stores_no_personal_data(app, platform
     launch_id = session_token.verify(state.token_secret, response.location[len(prefix) :])
     launch = storage.get_launch(state.config.database_path, launch_id)
     assert (launch.subject, launch.context_id, launch.resource_link_id) == ("user-42", "course-1", "resource-1")
-    assert launch.lineitem == f"{ISSUER}/lineitems/1"
+    assert launch.lineitem == f"{ISSUER}/lineitems/1/lineitem?type_id=1"
     assert launch.return_url == f"{ISSUER}/course/view.php?id=1"
     assert (launch.job_id, launch.unit_id) == (3, 7)
 
@@ -164,3 +168,54 @@ def test_launch_without_vocabulary_set_is_rejected(app, platform_key):
         base_url=HTTPS,
     )
     assert response.status_code == 422
+
+
+class FakeResponse:
+    def __init__(self, body=None):
+        self.ok = True
+        self.status_code = 200
+        self.headers = {}
+        self._body = body
+        self.content = json.dumps(body).encode() if body is not None else b""
+
+    def json(self):
+        return self._body
+
+
+def test_result_is_sent_to_the_gradebook_with_ags(app, platform_key, monkeypatch):
+    requests_sent = []
+
+    def post(session, url, data=None, headers=None):
+        requests_sent.append({"url": url, "data": data, "headers": headers})
+        return FakeResponse({"access_token": "platform-access-token"}) if url == f"{ISSUER}/token" else FakeResponse()
+
+    monkeypatch.setattr("requests.Session.post", post)
+    client = app.test_client()
+    query = parse_qs(urlparse(login(client).location).query)
+    redirect = client.post(
+        "/lti/launch",
+        data={"id_token": id_token(platform_key, query["nonce"][0]), "state": query["state"][0]},
+        base_url=HTTPS,
+    )
+    token = redirect.location.split("#lti_token=")[1]
+
+    response = client.post(
+        "/lti/results", json={"correct": 6, "total": 8}, headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert response.status_code == 204
+    token_request, score_request = requests_sent
+    assert token_request["url"] == f"{ISSUER}/token"
+    assertion = token_request["data"]["client_assertion"]
+    jwk = client.get("/lti/jwks").get_json()["keys"][0]
+    assert jwt.get_unverified_header(assertion)["kid"] == jwk["kid"]
+    public_pem = JWK(**jwk).export_to_pem()
+    claims = jwt.decode(assertion, public_pem, algorithms=["RS256"], audience=f"{ISSUER}/token")
+    assert claims["iss"] == CLIENT_ID
+
+    assert score_request["url"] == f"{ISSUER}/lineitems/1/lineitem/scores?type_id=1"
+    assert score_request["headers"]["Authorization"] == "Bearer platform-access-token"
+    assert score_request["headers"]["Content-Type"] == "application/vnd.ims.lis.v1.score+json"
+    score = json.loads(score_request["data"])
+    assert (score["scoreGiven"], score["scoreMaximum"], score["userId"]) == (6, 8, "user-42")
+    assert (score["activityProgress"], score["gradingProgress"]) == ("Completed", "FullyGraded")

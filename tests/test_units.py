@@ -1,11 +1,15 @@
 """Tests without key generation."""
 
+import json
 import time
+from datetime import datetime, timezone
 
 import jwt
 import pytest
+import requests
+from pylti1p3.exception import LtiServiceException
 
-from lunes_lti import create_app, keys
+from lunes_lti import create_app, grades, keys, views
 from lunes_lti.config import Config
 
 from lunes_lti import lti, session_token, storage
@@ -105,6 +109,7 @@ def test_launches(tmp_path):
         context_id="c",
         resource_link_id="r",
         lineitem=None,
+        ags_endpoint=None,
         return_url="https://lms.example.org/course/view.php?id=1",
         job_id=1,
         unit_id=2,
@@ -136,7 +141,7 @@ def app_without_keys(tmp_path, monkeypatch):
     return create_app(Config(base_url="http://localhost:8080", data_dir=tmp_path / "data"))
 
 
-def _create_launch(app, lifetime=60):
+def _create_launch(app, lifetime=60, ags_endpoint=None):
     return storage.create_launch(
         app.extensions["lunes_lti"].config.database_path,
         lifetime=lifetime,
@@ -147,6 +152,7 @@ def _create_launch(app, lifetime=60):
         context_id="c",
         resource_link_id="r",
         lineitem=None,
+        ags_endpoint=ags_endpoint,
         return_url="https://lms.example.org/course/view.php?id=1",
         job_id=3,
         unit_id=7,
@@ -192,3 +198,140 @@ def test_session_reports_expiry(app_without_keys):
     for token in (expired_token, _token(app_without_keys, expired_launch.id)):
         response = app_without_keys.test_client().get("/lti/session", headers={"Authorization": f"Bearer {token}"})
         assert (response.status_code, response.get_json()) == (401, {"error": "expired"})
+
+
+AGS_ENDPOINT = json.dumps(
+    {
+        "scope": [grades.SCORE_SCOPE],
+        "lineitem": "https://lms.example.org/mod/lti/services.php/4/lineitems/9/lineitem?type_id=1",
+    }
+)
+
+
+def _post_result(app, token, body):
+    return app.test_client().post("/lti/results", json=body, headers={"Authorization": f"Bearer {token}"})
+
+
+def test_results_are_sent_to_the_gradebook(app_without_keys, monkeypatch):
+    sent = []
+    monkeypatch.setattr(grades, "send_result", lambda conf, key, launch, result: sent.append((launch, result)))
+    launch = _create_launch(app_without_keys, ags_endpoint=AGS_ENDPOINT)
+
+    response = _post_result(app_without_keys, _token(app_without_keys, launch.id), {"correct": 6, "total": 8})
+
+    assert response.status_code == 204
+    assert sent == [(launch, grades.ExerciseResult(correct=6, total=8))]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        {},
+        {"correct": 9, "total": 8},
+        {"correct": -1, "total": 8},
+        {"correct": 0, "total": 0},
+        {"correct": True, "total": 8},
+        {"correct": "6", "total": 8},
+        {"correct": 1, "total": 1001},
+    ],
+)
+def test_invalid_results_are_rejected(app_without_keys, monkeypatch, body):
+    monkeypatch.setattr(grades, "send_result", lambda *args: pytest.fail("must not be sent"))
+    launch = _create_launch(app_without_keys, ags_endpoint=AGS_ENDPOINT)
+
+    response = _post_result(app_without_keys, _token(app_without_keys, launch.id), body)
+
+    assert (response.status_code, response.get_json()) == (422, {"error": "invalid_result"})
+
+
+def test_results_need_a_valid_token(app_without_keys):
+    response = _post_result(app_without_keys, "not-a-token", {"correct": 1, "total": 1})
+    assert (response.status_code, response.get_json()) == (401, {"error": "invalid"})
+
+
+@pytest.mark.parametrize(
+    "ags_endpoint",
+    [None, json.dumps({"scope": [grades.SCORE_SCOPE]}), json.dumps({"scope": [], "lineitem": "https://x/li"})],
+)
+def test_results_of_activities_without_grades(app_without_keys, ags_endpoint):
+    launch = _create_launch(app_without_keys, ags_endpoint=ags_endpoint)
+
+    response = _post_result(app_without_keys, _token(app_without_keys, launch.id), {"correct": 1, "total": 1})
+
+    assert (response.status_code, response.get_json()) == (409, {"error": "not_graded"})
+
+
+def test_rejected_grades_are_reported(app_without_keys, monkeypatch):
+    error_response = requests.Response()
+    error_response.status_code = 400
+
+    def reject(*args):
+        raise LtiServiceException(error_response)
+
+    monkeypatch.setattr(grades, "send_result", reject)
+    launch = _create_launch(app_without_keys, ags_endpoint=AGS_ENDPOINT)
+
+    response = _post_result(app_without_keys, _token(app_without_keys, launch.id), {"correct": 1, "total": 1})
+
+    assert (response.status_code, response.get_json()) == (502, {"error": "lms_error"})
+
+
+def test_build_grade():
+    launch = storage.Launch(
+        id="l",
+        issuer="i",
+        client_id="c",
+        deployment_id="d",
+        subject="user-42",
+        context_id=None,
+        resource_link_id="r",
+        lineitem=None,
+        ags_endpoint=AGS_ENDPOINT,
+        return_url=None,
+        job_id=1,
+        unit_id=2,
+        created_at=0,
+        expires_at=0,
+    )
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
+
+    grade = json.loads(grades.build_grade(launch, grades.ExerciseResult(6, 8), now).get_value())
+
+    assert grade == {
+        "scoreGiven": 6,
+        "scoreMaximum": 8,
+        "activityProgress": "Completed",
+        "gradingProgress": "FullyGraded",
+        "timestamp": "2026-11-10T12:00:00.000+00:00",
+        "userId": "user-42",
+    }
+
+
+def _error_response(status, url, text):
+    response = requests.Response()
+    response.status_code = status
+    response.url = url
+    response._content = text.encode("utf-8")
+    response.encoding = "utf-8"
+    return response
+
+
+def test_lms_errors_are_logged_briefly():
+    page = (
+        '<html><script>var M = {"sesskey":"secret-session-key"};</script>'
+        '<p class="errormessage">Fehler: fix_jwks_alg(): Argument #1 ($jwks) must be of type array</p></html>'
+    )
+    description = views.describe_lms_error(
+        _error_response(404, "https://lms.example.org/mod/lti/token.php?x=1", page)
+    )
+    assert description == (
+        "404 https://lms.example.org/mod/lti/token.php: "
+        "Fehler: fix_jwks_alg(): Argument #1 ($jwks) must be of type array"
+    )
+    assert "secret-session-key" not in description
+
+    json_error = views.describe_lms_error(
+        _error_response(400, "https://lms.example.org/token", '{"error": "invalid_client", "reason": "bad kid"}')
+    )
+    assert json_error == "400 https://lms.example.org/token: invalid_client bad kid"
