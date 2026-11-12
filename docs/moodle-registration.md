@@ -98,7 +98,9 @@ activity settings.
 
 **Grade:** Lunes sends the words correct on the first try out of all words of the word choice exercise; Moodle scales
 that to the maximum grade (6 of 8 → 75). Every finished attempt is sent, the gradebook shows the latest. The time of
-the attempt appears as feedback of the grade ("Bearbeitungszeit: 3 min 12 s").
+the attempt appears as feedback of the grade ("Bearbeitungszeit: 3 min 12 s"). Only learners are graded: a teacher who
+launches the activity sees it like a learner, and the result screen says that the result is not sent. lunes-lti logs
+every launch with the role (`LTI launch: role learner, job …, unit …`).
 
 After switching on the grade service or "Accept grades", launch the activity again: only new launches carry the AGS
 claim. Results of older launches are answered with `409 not_graded`.

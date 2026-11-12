@@ -65,7 +65,10 @@ def login(client, **extra):
     return client.post("/lti/login", data=LOGIN_PARAMS | {"lti1p3_new_window": "1"} | extra, base_url=HTTPS)
 
 
-def id_token(platform_key, nonce, custom=None):
+LEARNER_ROLE = "http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"
+
+
+def id_token(platform_key, nonce, custom=None, roles=(LEARNER_ROLE,)):
     now = int(time.time())
     claims = {
         "iss": ISSUER,
@@ -80,7 +83,7 @@ def id_token(platform_key, nonce, custom=None):
         lti.CLAIM + "message_type": "LtiResourceLinkRequest",
         lti.CLAIM + "version": "1.3.0",
         lti.DEPLOYMENT_ID_CLAIM: DEPLOYMENT_ID,
-        lti.CLAIM + "roles": ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"],
+        lti.ROLES_CLAIM: list(roles),
         lti.CLAIM + "target_link_uri": f"{TOOL_URL}/lti/launch",
         lti.RESOURCE_LINK_CLAIM: {"id": "resource-1"},
         lti.CONTEXT_CLAIM: {"id": "course-1", "title": "Kurs"},
@@ -126,7 +129,8 @@ def test_login_redirects_to_the_platform_with_iframe_compatible_cookies(app):
             assert attribute in cookie
 
 
-def test_launch_redirects_into_the_app_and_stores_no_personal_data(app, platform_key):
+def test_launch_redirects_into_the_app_and_stores_no_personal_data(app, platform_key, caplog):
+    caplog.set_level("INFO", logger="lunes_lti")
     client = app.test_client()
     query = parse_qs(urlparse(login(client).location).query)
 
@@ -146,10 +150,27 @@ def test_launch_redirects_into_the_app_and_stores_no_personal_data(app, platform
     assert launch.lineitem == f"{ISSUER}/lineitems/1/lineitem?type_id=1"
     assert launch.return_url == f"{ISSUER}/course/view.php?id=1"
     assert (launch.job_id, launch.unit_id) == (3, 7)
+    assert launch.role == "learner"
+    assert "LTI launch: role learner, job 3, unit 7" in caplog.text
+    assert "user-42" not in caplog.text
 
     database = state.config.database_path.read_bytes()
     for personal in (b"Ada Lovelace", b"ada@example.org", b"ada.l"):
         assert personal not in database
+
+
+def test_launch_by_a_teacher_is_stored_as_instructor(app, platform_key):
+    client = app.test_client()
+    query = parse_qs(urlparse(login(client).location).query)
+    instructor = "http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"
+    token = id_token(platform_key, query["nonce"][0], roles=[instructor])
+
+    response = client.post("/lti/launch", data={"id_token": token, "state": query["state"][0]}, base_url=HTTPS)
+
+    assert response.status_code == 302
+    state = app.extensions["lunes_lti"]
+    launch_id = session_token.verify(state.token_secret, response.location.split("#lti_token=")[1])
+    assert storage.get_launch(state.config.database_path, launch_id).role == "instructor"
 
 
 def test_launch_of_a_withdrawn_set_explains_it(app, platform_key, monkeypatch):

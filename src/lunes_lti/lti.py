@@ -27,7 +27,15 @@ CONTEXT_CLAIM = CLAIM + "context"
 DEPLOYMENT_ID_CLAIM = CLAIM + "deployment_id"
 RESOURCE_LINK_CLAIM = CLAIM + "resource_link"
 LAUNCH_PRESENTATION_CLAIM = CLAIM + "launch_presentation"
+ROLES_CLAIM = CLAIM + "roles"
 AGS_CLAIM = "https://purl.imsglobal.org/spec/lti-ags/claim/endpoint"
+
+# Role of the user in the course of the launch (FR-01). Only learners get grades (ADR 0020 in lunes-app).
+LEARNER = "learner"
+INSTRUCTOR = "instructor"
+OTHER = "other"
+MEMBERSHIP_ROLE = "http://purl.imsglobal.org/vocab/lis/v2/membership"
+INSTRUCTOR_ROLES = frozenset({"Instructor", "TeachingAssistant", "ContentDeveloper", "Administrator"})
 
 # Claims that may identify a person. Moodle sends name and e-mail unless the privacy settings of the tool forbid it,
 # and always its username in "ext" and the user's ID number in "lis".
@@ -54,6 +62,27 @@ PERSONAL_CLAIMS = frozenset(
 
 # Lifetime of nonce, state and the cached launch in the launch data storage, in seconds
 LAUNCH_DATA_LIFETIME = 2 * 60 * 60
+
+
+def course_role(roles: t.Any) -> str:
+    """``instructor``, ``learner`` or ``other`` from the roles claim.
+
+    Context roles are URIs like ``http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor`` (sub-roles like
+    ``…/membership/Instructor#TeachingAssistant``); LTI 1.3 also allows the short forms ``Instructor`` and ``Learner``.
+    Institution and system roles (e.g. a site administrator) do not count. Someone who is both counts as instructor:
+    a teacher's attempts are a preview, never a grade.
+    """
+    names = set()
+    for role in roles if isinstance(roles, list) else []:
+        if not isinstance(role, str):
+            continue
+        if "#" not in role:
+            names.add(role)
+        elif role.startswith(MEMBERSHIP_ROLE):
+            names.add(role.rsplit("#", 1)[1])
+    if names & INSTRUCTOR_ROLES:
+        return INSTRUCTOR
+    return LEARNER if "Learner" in names else OTHER
 
 
 def minimise(launch_data: t.Mapping[str, t.Any]) -> dict[str, t.Any]:

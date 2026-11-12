@@ -1,6 +1,7 @@
 """Tests without key generation."""
 
 import json
+import re
 import time
 from datetime import datetime, timezone
 
@@ -141,7 +142,7 @@ def app_without_keys(tmp_path, monkeypatch):
     return create_app(Config(base_url="http://localhost:8080", data_dir=tmp_path / "data"))
 
 
-def _create_launch(app, lifetime=60, ags_endpoint=None):
+def _create_launch(app, lifetime=60, ags_endpoint=None, role="learner"):
     return storage.create_launch(
         app.extensions["lunes_lti"].config.database_path,
         lifetime=lifetime,
@@ -156,6 +157,7 @@ def _create_launch(app, lifetime=60, ags_endpoint=None):
         return_url="https://lms.example.org/course/view.php?id=1",
         job_id=3,
         unit_id=7,
+        role=role,
     )
 
 
@@ -259,6 +261,16 @@ def test_invalid_results_are_rejected(app_without_keys, monkeypatch, body):
     response = _post_result(app_without_keys, _token(app_without_keys, launch.id), body)
 
     assert (response.status_code, response.get_json()) == (422, {"error": "invalid_result"})
+
+
+@pytest.mark.parametrize("role", ["instructor", "other"])
+def test_results_of_teachers_are_a_preview(app_without_keys, monkeypatch, role):
+    monkeypatch.setattr(grades, "send_result", lambda *args: pytest.fail("must not be sent"))
+    launch = _create_launch(app_without_keys, ags_endpoint=AGS_ENDPOINT, role=role)
+
+    response = _post_result(app_without_keys, _token(app_without_keys, launch.id), {"correct": 1, "total": 1})
+
+    assert (response.status_code, response.get_json()) == (409, {"error": "preview"})
 
 
 def test_results_need_a_valid_token(app_without_keys):
@@ -562,4 +574,45 @@ def test_launch_check_blocks_only_withdrawn_sets(app_with_cms, app_without_keys,
         # Without cms_url there is nothing to check
         assert views._is_unit_available(3, 8) is True
 
+
+MEMBERSHIP = "http://purl.imsglobal.org/vocab/lis/v2/membership"
+
+
+@pytest.mark.parametrize(
+    ("roles", "role"),
+    [
+        ([f"{MEMBERSHIP}#Learner"], "learner"),
+        (["Learner"], "learner"),
+        ([f"{MEMBERSHIP}#Instructor"], "instructor"),
+        ([f"{MEMBERSHIP}/Instructor#TeachingAssistant"], "instructor"),
+        # Teacher who is also enrolled as a learner: preview, never a grade
+        ([f"{MEMBERSHIP}#Learner", f"{MEMBERSHIP}#Instructor"], "instructor"),
+        # Site administrator without a role in the course
+        (["http://purl.imsglobal.org/vocab/lis/v2/institution/person#Administrator"], "other"),
+        ([f"{MEMBERSHIP}#Mentor"], "other"),
+        ([], "other"),
+        (None, "other"),
+        ("Learner", "other"),
+    ],
+)
+def test_course_role(roles, role):
+    assert lti.course_role(roles) == role
+
+
+def test_launches_stored_before_the_role_count_as_learners(tmp_path):
+    database = tmp_path / "lti.sqlite"
+    old_schema = re.sub(r",\s*-- Role.*\n\s*role TEXT.*", "", storage.SCHEMA)
+    assert "role TEXT" not in old_schema
+    with storage.connect(database) as connection:
+        connection.executescript(old_schema)
+        connection.execute(
+            "INSERT INTO launches (id, issuer, client_id, deployment_id, subject, resource_link_id, job_id, unit_id,"
+            " created_at, expires_at) VALUES ('old', 'i', 'c', 'd', 's', 'r', 1, 2, ?, ?)",
+            (time.time(), time.time() + 60),
+        )
+    connection.close()
+
+    storage.init_db(database)
+
+    assert storage.get_launch(database, "old").role == "learner"
 

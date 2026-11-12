@@ -89,6 +89,10 @@ def launch():
             "In der Aktivität ist kein Vokabelset eingestellt (Parameter job_id und unit_id fehlen).", status=422
         )
 
+    role = lti.course_role(launch_data.get(lti.ROLES_CLAIM))
+    # Role and set, not the user ID: enough to follow a launch in the log (TC-02)
+    logger.info("LTI launch: role %s, job %s, unit %s", role, job_id, unit_id)
+
     if not _is_unit_available(job_id, unit_id):
         logger.warning("LTI launch of a vocabulary set the CMS no longer offers: job %s, unit %s", job_id, unit_id)
         # No link back: the learner stays on the course page and uses its navigation (ADR 0019)
@@ -108,6 +112,7 @@ def launch():
         return_url=_http_url((launch_data.get(lti.LAUNCH_PRESENTATION_CLAIM) or {}).get("return_url")),
         job_id=job_id,
         unit_id=unit_id,
+        role=role,
     )
     token = session_token.issue(state.token_secret, created.id, state.config.token_lifetime)
 
@@ -220,8 +225,9 @@ def results():
     """Result of a finished exercise, sent by the app: ``{"correct": <int>, "total": <int>}`` (FR-03, FR-12), optionally
     with ``"durationSeconds": <int>``, the time on task of the attempt (FR-16).
 
-    Answers 204 when the LMS accepted the grade, 401 like ``/lti/session``, 409 ``not_graded`` if the activity does
-    not accept grades, 422 for an invalid result and 502 ``lms_error`` if the LMS rejected the grade.
+    Answers 204 when the LMS accepted the grade, 401 like ``/lti/session``, 409 ``preview`` for a launch by a teacher
+    or anyone else who is not a learner (FR-01), 409 ``not_graded`` if the activity does not accept grades, 422 for an
+    invalid result and 502 ``lms_error`` if the LMS rejected the grade.
     """
     launch, error = _launch_from_token()
     if launch is None:
@@ -239,6 +245,10 @@ def results():
     )
     if not is_valid:
         return _json_error("invalid_result", 422)
+
+    if launch.role != lti.LEARNER:
+        # The LMS would reject it (Moodle: 400 for users it cannot grade); a teacher's attempt is a preview
+        return _json_error("preview", 409)
 
     state = _state()
     try:

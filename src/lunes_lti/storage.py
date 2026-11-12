@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS launches (
     job_id INTEGER NOT NULL,
     unit_id INTEGER NOT NULL,
     created_at REAL NOT NULL,
-    expires_at REAL NOT NULL
+    expires_at REAL NOT NULL,
+    -- Role in the course: learner, instructor or other (FR-01); only learners get grades
+    role TEXT NOT NULL DEFAULT 'learner'
 );
 """
 
@@ -64,6 +66,9 @@ def _migrate(connection: sqlite3.Connection) -> None:
     for column in ("return_url", "ags_endpoint"):
         if column not in columns:
             connection.execute(f"ALTER TABLE launches ADD COLUMN {column} TEXT")
+    if "role" not in columns:
+        # Launches stored before the role was read were treated as learners
+        connection.execute("ALTER TABLE launches ADD COLUMN role TEXT NOT NULL DEFAULT 'learner'")
 
 
 class SqliteLaunchDataStorage(LaunchDataStorage[t.Any]):
@@ -117,6 +122,7 @@ class Launch:
     unit_id: int
     created_at: float
     expires_at: float
+    role: str = "learner"
 
 
 def create_launch(database_path: Path, lifetime: int, **fields: t.Any) -> Launch:
