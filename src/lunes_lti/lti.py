@@ -138,6 +138,11 @@ class CookieService(FlaskCookieService):
 class SessionService(FlaskSessionService):
     _launch_data_lifetime = LAUNCH_DATA_LIFETIME
 
+    def consume_nonce(self, nonce: str) -> None:
+        """Removes the nonce of an accepted launch. PyLTI1p3 only checks that the nonce exists, so the same id_token could
+        otherwise be launched again from the same browser while the nonce lives (TC-09, NFR-03)."""
+        self.data_storage.remove_value(self._get_key("nonce", nonce))
+
 
 class OIDCLogin(FlaskOIDCLogin):
     def __init__(self, lti_request, tool_config, launch_data_storage, cookie_path: str):
@@ -161,8 +166,10 @@ class MessageLaunch(FlaskMessageLaunch):
         )
 
     def save_launch_data(self):
-        # Same as PyLTI1p3, but caches the launch without personal claims
+        # Same as PyLTI1p3, but caches the launch without personal claims. Runs after all checks have passed, so the
+        # nonce is used up here: each id_token can be launched only once.
         state = self._get_request_param("state")
         self._session_service.save_launch_data(self._launch_id, minimise(self._jwt["body"]))
         self._session_service.set_state_valid(state, self._get_id_token_hash())
+        self._session_service.consume_nonce(self._jwt["body"]["nonce"])
         return self

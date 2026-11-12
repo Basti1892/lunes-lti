@@ -105,6 +105,10 @@ class SqliteLaunchDataStorage(LaunchDataStorage[t.Any]):
     def check_value(self, key: str) -> bool:
         return self.get_value(key) is not None
 
+    def remove_value(self, key: str) -> None:
+        with closing(connect(self._database_path)) as connection, connection:
+            connection.execute("DELETE FROM lti_data WHERE key = ?", (self._prepare_key(key),))
+
 
 @dataclass(frozen=True)
 class Launch:

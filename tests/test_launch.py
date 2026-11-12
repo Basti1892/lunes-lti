@@ -5,6 +5,7 @@ These tests generate throwaway RSA keys (tool and simulated LMS) in a temporary 
 
 import json
 import time
+from contextlib import closing
 from urllib.parse import parse_qs, urlparse
 
 import jwt
@@ -191,6 +192,41 @@ def test_launch_of_a_withdrawn_set_explains_it(app, platform_key, monkeypatch):
     assert "<a " not in page
     with storage.connect(app.extensions["lunes_lti"].config.database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 0
+
+
+def _launch_count(app):
+    with closing(storage.connect(app.extensions["lunes_lti"].config.database_path)) as connection:
+        return connection.execute("SELECT COUNT(*) FROM launches").fetchone()[0]
+
+
+def test_launch_with_a_forged_signature_is_rejected(app, platform_key):
+    # TC-09 (NFR-03): an id_token signed with another key under the platform's key ID
+    forged_key = JWK.generate(kty="RSA", size=2048, kid="platform-key")
+    client = app.test_client()
+    query = parse_qs(urlparse(login(client).location).query)
+
+    response = client.post(
+        "/lti/launch",
+        data={"id_token": id_token(forged_key, query["nonce"][0]), "state": query["state"][0]},
+        base_url=HTTPS,
+    )
+
+    assert response.status_code == 400
+    assert _launch_count(app) == 0
+
+
+def test_replayed_launch_is_rejected(app, platform_key):
+    # TC-09 (NFR-03): the same id_token and state sent again from the same browser, with its cookies
+    client = app.test_client()
+    query = parse_qs(urlparse(login(client).location).query)
+    data = {"id_token": id_token(platform_key, query["nonce"][0]), "state": query["state"][0]}
+
+    first = client.post("/lti/launch", data=data, base_url=HTTPS)
+    replay = client.post("/lti/launch", data=data, base_url=HTTPS)
+
+    assert first.status_code == 302
+    assert replay.status_code == 400
+    assert _launch_count(app) == 1
 
 
 def test_launch_without_login_cookies_is_rejected(app, platform_key):

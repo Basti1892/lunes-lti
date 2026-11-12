@@ -616,3 +616,14 @@ def test_launches_stored_before_the_role_count_as_learners(tmp_path):
 
     assert storage.get_launch(database, "old").role == "learner"
 
+
+def test_launch_data_storage_removes_values(tmp_path):
+    database = tmp_path / "lti.sqlite"
+    storage.init_db(database)
+    launch_data = storage.SqliteLaunchDataStorage(database)
+    launch_data.set_value("nonce-abc", True, exp=60)
+
+    launch_data.remove_value("nonce-abc")
+
+    assert launch_data.check_value("nonce-abc") is False
+
