@@ -89,6 +89,11 @@ def launch():
             "In der Aktivität ist kein Vokabelset eingestellt (Parameter job_id und unit_id fehlen).", status=422
         )
 
+    if not _is_unit_available(job_id, unit_id):
+        logger.warning("LTI launch of a vocabulary set the CMS no longer offers: job %s, unit %s", job_id, unit_id)
+        # No link back: the learner stays on the course page and uses its navigation (ADR 0019)
+        return _error(UNAVAILABLE_MESSAGE, status=404)
+
     created = storage.create_launch(
         state.config.database_path,
         lifetime=state.config.token_lifetime,
@@ -108,6 +113,29 @@ def launch():
 
     # The token goes into the fragment: browsers do not send it to servers, so it does not end up in access logs
     return redirect(f"{state.config.base_url}/jobs/{job_id}/units/{unit_id}#lti_token={quote(token)}")
+
+
+# Withdrawn or moved vocabulary set (FR-07, docs/web/0019-withdrawn-vocabulary-sets.md in lunes-app)
+UNAVAILABLE_MESSAGE = (
+    "Dieses Vokabelset gibt es in Lunes nicht mehr. Lehrkräfte können in den Einstellungen der Aktivität mit "
+    "„Inhalt auswählen“ ein anderes Vokabelset wählen."
+)
+# The check must not slow down a launch noticeably (NFR-06); if the CMS is slower, the launch goes ahead
+LAUNCH_CMS_TIMEOUT = 3
+
+
+def _is_unit_available(job_id: int, unit_id: int) -> bool:
+    """``False`` only if the CMS answers that the set is gone. Without ``cms_url`` or if the CMS cannot answer, the
+    launch goes ahead: the app shows its own error then, and launches do not depend on the CMS being reachable.
+    """
+    cms_url = _state().config.cms_url
+    if cms_url is None:
+        return True
+    try:
+        return cms.find_unit(cms_url, job_id, unit_id, timeout=LAUNCH_CMS_TIMEOUT) is not None
+    except cms.CmsError as error:
+        logger.warning("Vocabulary set could not be checked, launching anyway: %s", error)
+        return True
 
 
 def _start_deep_linking(message_launch, launch_data):

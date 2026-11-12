@@ -11,7 +11,7 @@ import jwt
 import pytest
 from jwcrypto.jwk import JWK
 
-from lunes_lti import create_app, lti, session_token, storage
+from lunes_lti import cms, create_app, lti, session_token, storage
 from lunes_lti.config import Config, Platform
 
 pytestmark = pytest.mark.keys
@@ -32,6 +32,8 @@ def platform_key():
 def app(tmp_path, platform_key, monkeypatch):
     public_jwk = json.loads(platform_key.export_public()) | {"alg": "RS256"}
     monkeypatch.setattr(lti.MessageLaunch, "fetch_public_key", lambda self, url: {"keys": [public_jwk]})
+    # The launch checks that the CMS still offers the set (FR-07); here it always does
+    monkeypatch.setattr(cms, "find_unit", lambda cms_url, job_id, unit_id, timeout: cms.Unit(unit_id, "Organe", 6))
     config = Config(
         base_url=TOOL_URL,
         data_dir=tmp_path / "data",
@@ -148,6 +150,26 @@ def test_launch_redirects_into_the_app_and_stores_no_personal_data(app, platform
     database = state.config.database_path.read_bytes()
     for personal in (b"Ada Lovelace", b"ada@example.org", b"ada.l"):
         assert personal not in database
+
+
+def test_launch_of_a_withdrawn_set_explains_it(app, platform_key, monkeypatch):
+    monkeypatch.setattr(cms, "find_unit", lambda cms_url, job_id, unit_id, timeout: None)
+    client = app.test_client()
+    query = parse_qs(urlparse(login(client).location).query)
+
+    response = client.post(
+        "/lti/launch",
+        data={"id_token": id_token(platform_key, query["nonce"][0]), "state": query["state"][0]},
+        base_url=HTTPS,
+    )
+
+    assert response.status_code == 404
+    page = response.get_data(as_text=True)
+    assert "Dieses Vokabelset gibt es in Lunes nicht mehr." in page
+    # No link out of the iframe: the learner stays on the course page
+    assert "<a " not in page
+    with storage.connect(app.extensions["lunes_lti"].config.database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM launches").fetchone()[0] == 0
 
 
 def test_launch_without_login_cookies_is_rejected(app, platform_key):

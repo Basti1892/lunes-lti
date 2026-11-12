@@ -92,6 +92,10 @@ uses, because the IDs differ between the CMS instances: the test CMS for the dev
 
 A launch redirects to `<base>/jobs/<job ID>/units/<unit ID>#lti_token=…`.
 
+If the vocabulary set was withdrawn from the CMS, the launch shows "Dieses Vokabelset gibt es in Lunes nicht mehr." in
+place of the app; the course page around it stays usable. The teacher picks another set with **Select content** in the
+activity settings.
+
 **Grade:** Lunes sends the words correct on the first try out of all words of the word choice exercise; Moodle scales
 that to the maximum grade (6 of 8 → 75). Every finished attempt is sent, the gradebook shows the latest. The time of
 the attempt appears as feedback of the grade ("Bearbeitungszeit: 3 min 12 s").

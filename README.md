@@ -2,14 +2,15 @@
 
 LTI 1.3 connector between learning management systems (Moodle first) and the
 [Lunes](https://github.com/digitalfabrik/lunes-app) web app. The LMS launches the tool, the service checks the launch
-and redirects into the web app with a short-lived session token. Background: ADRs 0013 to 0018 in the lunes-app
+and redirects into the web app with a short-lived session token. Background: ADRs 0013 to 0019 in the lunes-app
 repository (`docs/web/`).
 
 Endpoints, all below the origin of the web app:
 
 - `/lti/login`: OIDC login initiation, called by the LMS
 - `/lti/launch`: launch (redirect URI); redirects to `/jobs/<job_id>/units/<unit_id>#lti_token=<token>`. A Deep
-  Linking request shows the vocabulary set picker instead
+  Linking request shows the vocabulary set picker instead. If the CMS no longer offers the set, it shows a message
+  instead of the app
 - `/lti/deep-link`: steps of the picker (profession, set); sends the chosen set back to the LMS
 - `/lti/session`: launch data for the app (`Authorization: Bearer <token>`): `jobId`, `unitId`, `returnUrl`,
   `expiresAt`; `401` if the token is expired, invalid or missing

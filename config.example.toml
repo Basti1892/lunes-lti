@@ -11,8 +11,9 @@ data_dir = "data"
 # Lifetime of the session token the app gets after a launch, in seconds
 token_lifetime = 7200
 
-# API of the Lunes CMS for the vocabulary set picker (Deep Linking). Must be the CMS the web app uses, because the IDs
-# differ between the CMS instances: the test CMS for the development server (yarn web), the production CMS otherwise.
+# API of the Lunes CMS for the vocabulary set picker (Deep Linking) and the check at launch that the set still exists.
+# Must be the CMS the web app uses, because the IDs differ between the CMS instances: the test CMS for the development
+# server (yarn web), the production CMS otherwise.
 cms_url = "https://lunes-test.tuerantuer.org/api/v2"
 
 # One entry per LMS registration. The values are shown by Moodle after registering the tool

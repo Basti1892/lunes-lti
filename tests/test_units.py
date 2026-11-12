@@ -370,6 +370,8 @@ def test_lms_errors_are_logged_briefly():
 
 from lunes_lti import cms, deep_linking  # noqa: E402
 
+CMS_URL = "https://cms.example.org/api/v2"
+
 CONTEXT = deep_linking.Context(
     issuer="https://lms.example.org",
     client_id="abc",
@@ -410,7 +412,7 @@ def test_cms_lists(monkeypatch):
         ],
         "https://cms.example.org/api/v2/jobs/3/units": [{"id": 7, "title": "Organe", "number_words": 6}],
     }
-    monkeypatch.setattr(cms, "_get", lambda url: responses[url])
+    monkeypatch.setattr(cms, "_get", lambda url, timeout=cms.TIMEOUT: responses[url])
     assert cms.list_jobs("https://cms.example.org/api/v2") == [cms.Job(3, "Bäcker:in"), cms.Job(5, "pflege")]
     assert cms.list_units("https://cms.example.org/api/v2", 3) == [cms.Unit(7, "Organe", 6)]
 
@@ -502,3 +504,62 @@ def test_load_config_reads_the_cms_url(tmp_path):
     assert load_config(config_file).cms_url == "https://cms.example.org/api/v2"
     config_file.write_text('base_url = "http://localhost:8080"\n')
     assert load_config(config_file).cms_url is None
+
+
+def test_cms_tells_withdrawn_professions_from_errors(monkeypatch):
+    import urllib.error
+
+    def answer(status):
+        def urlopen(request, timeout):
+            raise urllib.error.HTTPError(request.full_url, status, "error", {}, None)
+
+        return urlopen
+
+    monkeypatch.setattr(cms.urllib.request, "urlopen", answer(403))
+    with pytest.raises(cms.NotFound):
+        cms._get("https://cms.example.org/api/v2/jobs/9/units")
+    monkeypatch.setattr(cms.urllib.request, "urlopen", answer(500))
+    with pytest.raises(cms.CmsError) as error:
+        cms._get("https://cms.example.org/api/v2/jobs/9/units")
+    assert not isinstance(error.value, cms.NotFound)
+
+
+def test_find_unit(monkeypatch):
+    def list_units(cms_url, job_id, timeout):
+        if job_id == 9:
+            raise cms.NotFound("withdrawn")
+        return [cms.Unit(7, "Organe", 6)]
+
+    monkeypatch.setattr(cms, "list_units", list_units)
+    assert cms.find_unit(CMS_URL, 3, 7) == cms.Unit(7, "Organe", 6)
+    assert cms.find_unit(CMS_URL, 3, 8) is None
+    assert cms.find_unit(CMS_URL, 9, 7) is None
+
+
+@pytest.fixture
+def app_with_cms(tmp_path, monkeypatch):
+    monkeypatch.setattr(keys, "ensure_key_pair", lambda data_dir: ("unused", "unused"))
+    monkeypatch.setattr(keys, "ensure_token_secret", lambda data_dir: SECRET)
+    return create_app(Config(base_url="http://localhost:8080", data_dir=tmp_path / "data", cms_url=CMS_URL))
+
+
+def test_launch_check_blocks_only_withdrawn_sets(app_with_cms, app_without_keys, monkeypatch):
+    answers = {7: cms.Unit(7, "Organe", 6), 8: None}
+
+    def find_unit(cms_url, job_id, unit_id, timeout):
+        assert timeout == views.LAUNCH_CMS_TIMEOUT
+        if unit_id == 9:
+            raise cms.CmsError("timeout")
+        return answers[unit_id]
+
+    monkeypatch.setattr(cms, "find_unit", find_unit)
+    with app_with_cms.app_context():
+        assert views._is_unit_available(3, 7) is True
+        assert views._is_unit_available(3, 8) is False
+        # The CMS cannot answer: the launch goes ahead
+        assert views._is_unit_available(3, 9) is True
+    with app_without_keys.app_context():
+        # Without cms_url there is nothing to check
+        assert views._is_unit_available(3, 8) is True
+
+
