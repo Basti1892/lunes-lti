@@ -2,7 +2,7 @@
 
 LTI 1.3 connector between learning management systems (Moodle first) and the
 [Lunes](https://github.com/digitalfabrik/lunes-app) web app. The LMS launches the tool, the service checks the launch
-and redirects into the web app with a short-lived session token. Background: ADRs 0013 to 0021 in the lunes-app
+and redirects into the web app with a short-lived session token. Background: ADRs 0013 to 0022 in the lunes-app
 repository (`docs/web/`).
 
 Endpoints, all below the origin of the web app:

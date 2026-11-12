@@ -105,6 +105,20 @@ every launch with the role (`LTI launch: role learner, job …, unit …`).
 After switching on the grade service or "Accept grades", launch the activity again: only new launches carry the AGS
 claim. Results of older launches are answered with `409 not_graded`.
 
+**Settings per activity** (ADR 0022 in lunes-app): Lunes has no settings of its own. Teachers use the settings of the
+activity in Moodle:
+
+- **Grade:** maximum grade (100 after "Select content"; change it before the first grades, Moodle locks it afterwards),
+  grade category, grade to pass. The weight in the course total is set in the gradebook setup.
+- **Completion conditions** (only if completion tracking is enabled in the course settings): e.g. "Receive a grade" (the
+  word choice exercise was finished at least once) and "Set reminder in Timeline" (shown in the learners' calendar and
+  timeline).
+- **Restrict access:** e.g. until a date; afterwards the activity cannot be launched (a session already open can still
+  be finished and graded, up to two hours).
+
+Not configurable: number of attempts (every attempt is sent, the latest counts), notifications from Lunes, and which
+learning modes must be done (only the word choice exercise produces a result).
+
 **Without Deep Linking** (or for activities created before): set the custom parameters by hand under **Show more…** →
 **Custom parameters**:
 
