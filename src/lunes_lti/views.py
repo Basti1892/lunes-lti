@@ -183,11 +183,14 @@ def session():
 
 
 MAX_WORDS = 1000
+# One day; an attempt cannot take longer than the session token is valid anyway
+MAX_DURATION_SECONDS = 24 * 60 * 60
 
 
 @bp.post("/results")
 def results():
-    """Result of a finished exercise, sent by the app: ``{"correct": <int>, "total": <int>}`` (FR-03, FR-12).
+    """Result of a finished exercise, sent by the app: ``{"correct": <int>, "total": <int>}`` (FR-03, FR-12), optionally
+    with ``"durationSeconds": <int>``, the time on task of the attempt (FR-16).
 
     Answers 204 when the LMS accepted the grade, 401 like ``/lti/session``, 409 ``not_graded`` if the activity does
     not accept grades, 422 for an invalid result and 502 ``lms_error`` if the LMS rejected the grade.
@@ -199,23 +202,29 @@ def results():
     body = request.get_json(silent=True)
     correct = body.get("correct") if isinstance(body, dict) else None
     total = body.get("total") if isinstance(body, dict) else None
+    duration = body.get("durationSeconds") if isinstance(body, dict) else None
     is_valid = (
-        all(isinstance(value, int) and not isinstance(value, bool) for value in (correct, total))
+        all(_is_int(value) for value in (correct, total))
         and 0 < total <= MAX_WORDS
         and 0 <= correct <= total
+        and (duration is None or (_is_int(duration) and 0 <= duration <= MAX_DURATION_SECONDS))
     )
     if not is_valid:
         return _json_error("invalid_result", 422)
 
     state = _state()
     try:
-        grades.send_result(state.tool_conf, state.public_key, launch, grades.ExerciseResult(correct, total))
+        grades.send_result(state.tool_conf, state.public_key, launch, grades.ExerciseResult(correct, total, duration))
     except grades.GradesNotAccepted:
         return _json_error("not_graded", 409)
     except LtiServiceException as error:
         logger.warning("LMS rejected the grade: %s", describe_lms_error(error.response))
         return _json_error("lms_error", 502)
     return "", 204
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 MAX_ERROR_LENGTH = 300

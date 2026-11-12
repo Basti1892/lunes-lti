@@ -3,12 +3,15 @@
 The grade of a finished word choice exercise is the number of words answered correctly on the first try out of all
 words of the exercise, the same "X von Y Wörter richtig" the learner sees. Every finished attempt is sent; the LMS
 keeps the latest (docs/web/0016-grade-passback.md in lunes-app).
+
+The time on task of the attempt (docs/web/0018-time-on-task.md) goes into the standard ``submission`` field of the
+score (start and end) and into the comment, which Moodle shows as feedback in the gradebook.
 """
 
 import json
 import typing as t
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from jwcrypto.jwk import JWK
 from pylti1p3.assignments_grades import AssignmentsGradesService
@@ -49,6 +52,8 @@ class KeyIdServiceConnector(ServiceConnector):
 class ExerciseResult:
     correct: int
     total: int
+    # Time from opening the exercise to finishing it, measured by the app
+    duration_seconds: int | None = None
 
 
 class GradesNotAccepted(Exception):
@@ -62,17 +67,35 @@ def ags_service_data(launch: Launch) -> dict[str, t.Any]:
     return endpoint
 
 
+def format_duration(seconds: int) -> str:
+    """German, short: ``42 s``, ``3 min 12 s``, ``1 h 5 min 0 s``."""
+    hours, rest = divmod(seconds, 3600)
+    minutes, seconds = divmod(rest, 60)
+    if hours:
+        return f"{hours} h {minutes} min {seconds} s"
+    return f"{minutes} min {seconds} s" if minutes else f"{seconds} s"
+
+
+def _iso(moment: datetime) -> str:
+    return moment.isoformat(timespec="milliseconds")
+
+
 def build_grade(launch: Launch, result: ExerciseResult, now: datetime | None = None) -> Grade:
-    timestamp = (now or datetime.now(timezone.utc)).isoformat(timespec="milliseconds")
-    return (
+    finished = now or datetime.now(timezone.utc)
+    grade = (
         Grade()
         .set_score_given(result.correct)
         .set_score_maximum(result.total)
         .set_activity_progress("Completed")
         .set_grading_progress("FullyGraded")
-        .set_timestamp(timestamp)
+        .set_timestamp(_iso(finished))
         .set_user_id(launch.subject)
     )
+    if result.duration_seconds is not None:
+        started = finished - timedelta(seconds=result.duration_seconds)
+        grade.set_comment(f"Bearbeitungszeit: {format_duration(result.duration_seconds)}")
+        grade.set_extra_claims({"submission": {"startedAt": _iso(started), "submittedAt": _iso(finished)}})
+    return grade
 
 
 def send_result(tool_conf: ToolConfDict, public_key: str, launch: Launch, result: ExerciseResult) -> None:

@@ -201,7 +201,9 @@ def test_result_is_sent_to_the_gradebook_with_ags(app, platform_key, monkeypatch
     token = redirect.location.split("#lti_token=")[1]
 
     response = client.post(
-        "/lti/results", json={"correct": 6, "total": 8}, headers={"Authorization": f"Bearer {token}"}
+        "/lti/results",
+        json={"correct": 6, "total": 8, "durationSeconds": 95},
+        headers={"Authorization": f"Bearer {token}"},
     )
 
     assert response.status_code == 204
@@ -220,6 +222,8 @@ def test_result_is_sent_to_the_gradebook_with_ags(app, platform_key, monkeypatch
     score = json.loads(score_request["data"])
     assert (score["scoreGiven"], score["scoreMaximum"], score["userId"]) == (6, 8, "user-42")
     assert (score["activityProgress"], score["gradingProgress"]) == ("Completed", "FullyGraded")
+    assert score["comment"] == "Bearbeitungszeit: 1 min 35 s"
+    assert set(score["submission"]) == {"startedAt", "submittedAt"}
 
 
 DEEP_LINK_RETURN_URL = f"{ISSUER}/mod/lti/contentitem_return.php"

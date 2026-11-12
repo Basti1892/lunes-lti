@@ -223,6 +223,18 @@ def test_results_are_sent_to_the_gradebook(app_without_keys, monkeypatch):
     assert sent == [(launch, grades.ExerciseResult(correct=6, total=8))]
 
 
+def test_results_carry_the_time_on_task(app_without_keys, monkeypatch):
+    sent = []
+    monkeypatch.setattr(grades, "send_result", lambda conf, key, launch, result: sent.append(result))
+    launch = _create_launch(app_without_keys, ags_endpoint=AGS_ENDPOINT)
+    body = {"correct": 6, "total": 8, "durationSeconds": 95}
+
+    response = _post_result(app_without_keys, _token(app_without_keys, launch.id), body)
+
+    assert response.status_code == 204
+    assert sent == [grades.ExerciseResult(correct=6, total=8, duration_seconds=95)]
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -234,6 +246,10 @@ def test_results_are_sent_to_the_gradebook(app_without_keys, monkeypatch):
         {"correct": True, "total": 8},
         {"correct": "6", "total": 8},
         {"correct": 1, "total": 1001},
+        {"correct": 1, "total": 1, "durationSeconds": -1},
+        {"correct": 1, "total": 1, "durationSeconds": 86401},
+        {"correct": 1, "total": 1, "durationSeconds": 9.5},
+        {"correct": 1, "total": 1, "durationSeconds": "95"},
     ],
 )
 def test_invalid_results_are_rejected(app_without_keys, monkeypatch, body):
@@ -306,6 +322,19 @@ def test_build_grade():
         "timestamp": "2026-11-10T12:00:00.000+00:00",
         "userId": "user-42",
     }
+
+    with_duration = grades.build_grade(launch, grades.ExerciseResult(6, 8, duration_seconds=95), now).get_value()
+    assert json.loads(with_duration) == grade | {
+        "comment": "Bearbeitungszeit: 1 min 35 s",
+        "submission": {"startedAt": "2026-11-10T11:58:25.000+00:00", "submittedAt": "2026-11-10T12:00:00.000+00:00"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("seconds", "text"), [(0, "0 s"), (42, "42 s"), (60, "1 min 0 s"), (192, "3 min 12 s"), (3900, "1 h 5 min 0 s")]
+)
+def test_format_duration(seconds, text):
+    assert grades.format_duration(seconds) == text
 
 
 def _error_response(status, url, text):

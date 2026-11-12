@@ -2,7 +2,7 @@
 
 LTI 1.3 connector between learning management systems (Moodle first) and the
 [Lunes](https://github.com/digitalfabrik/lunes-app) web app. The LMS launches the tool, the service checks the launch
-and redirects into the web app with a short-lived session token. Background: ADRs 0013 to 0017 in the lunes-app
+and redirects into the web app with a short-lived session token. Background: ADRs 0013 to 0018 in the lunes-app
 repository (`docs/web/`).
 
 Endpoints, all below the origin of the web app:
@@ -14,7 +14,7 @@ Endpoints, all below the origin of the web app:
 - `/lti/session`: launch data for the app (`Authorization: Bearer <token>`): `jobId`, `unitId`, `returnUrl`,
   `expiresAt`; `401` if the token is expired, invalid or missing
 - `/lti/results`: result of a finished exercise from the app (`Authorization: Bearer <token>`,
-  `{"correct": <int>, "total": <int>}`), sent to the LMS gradebook via AGS
+  `{"correct": <int>, "total": <int>, "durationSeconds": <int, optional>}`), sent to the LMS gradebook via AGS
 - `/lti/jwks`: public key set of the tool
 
 ## Development setup (Windows, Git Bash)
