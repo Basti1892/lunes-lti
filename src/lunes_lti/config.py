@@ -31,6 +31,9 @@ class Config:
     platforms: list[Platform] = field(default_factory=list)
     # Lifetime of the session token the app gets after a launch, in seconds
     token_lifetime: int = 2 * 60 * 60
+    # API of the Lunes CMS the web app uses, for the vocabulary set picker of Deep Linking,
+    # e.g. "https://lunes-test.tuerantuer.org/api/v2". Without it, Deep Linking shows an error; launches still work.
+    cms_url: str | None = None
 
     @property
     def launch_url(self) -> str:
@@ -61,4 +64,5 @@ def load_config(path: str | Path) -> Config:
         data_dir=data_dir,
         platforms=[Platform(**platform) for platform in raw.get("platforms", [])],
         token_lifetime=int(raw.get("token_lifetime", Config.token_lifetime)),
+        cms_url=raw["cms_url"].rstrip("/") if raw.get("cms_url") else None,
     )

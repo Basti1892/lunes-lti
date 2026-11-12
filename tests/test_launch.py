@@ -35,6 +35,7 @@ def app(tmp_path, platform_key, monkeypatch):
     config = Config(
         base_url=TOOL_URL,
         data_dir=tmp_path / "data",
+        cms_url="https://cms.example.org/api/v2",
         platforms=[
             Platform(
                 issuer=ISSUER,
@@ -219,3 +220,72 @@ def test_result_is_sent_to_the_gradebook_with_ags(app, platform_key, monkeypatch
     score = json.loads(score_request["data"])
     assert (score["scoreGiven"], score["scoreMaximum"], score["userId"]) == (6, 8, "user-42")
     assert (score["activityProgress"], score["gradingProgress"]) == ("Completed", "FullyGraded")
+
+
+DEEP_LINK_RETURN_URL = f"{ISSUER}/mod/lti/contentitem_return.php"
+
+
+def deep_link_token(platform_key, nonce):
+    now = int(time.time())
+    claims = {
+        "iss": ISSUER,
+        "aud": CLIENT_ID,
+        "sub": "teacher-1",
+        "iat": now,
+        "exp": now + 60,
+        "nonce": nonce,
+        "name": "Grace Hopper",
+        lti.CLAIM + "message_type": "LtiDeepLinkingRequest",
+        lti.CLAIM + "version": "1.3.0",
+        lti.DEPLOYMENT_ID_CLAIM: DEPLOYMENT_ID,
+        lti.CLAIM + "roles": ["http://purl.imsglobal.org/vocab/lis/v2/membership#Instructor"],
+        lti.CONTEXT_CLAIM: {"id": "course-1"},
+        "https://purl.imsglobal.org/spec/lti-dl/claim/deep_linking_settings": {
+            "deep_link_return_url": DEEP_LINK_RETURN_URL,
+            "accept_types": ["ltiResourceLink"],
+            "accept_presentation_document_targets": ["iframe", "window"],
+            "accept_multiple": False,
+            "data": "opaque-lms-data",
+        },
+    }
+    private_pem = platform_key.export_to_pem(private_key=True, password=None)
+    return jwt.encode(claims, private_pem, algorithm="RS256", headers={"kid": "platform-key"})
+
+
+def test_deep_linking_returns_the_chosen_set_signed_to_the_lms(app, platform_key, monkeypatch):
+    from lunes_lti import cms
+
+    monkeypatch.setattr(cms, "list_jobs", lambda cms_url: [cms.Job(3, "Bäcker:in")])
+    monkeypatch.setattr(cms, "list_units", lambda cms_url, job_id: [cms.Unit(7, "Organe", 6)])
+    state = app.extensions["lunes_lti"]
+
+    client = app.test_client()
+    query = parse_qs(urlparse(login(client).location).query)
+    picker = client.post(
+        "/lti/launch",
+        data={"id_token": deep_link_token(platform_key, query["nonce"][0]), "state": query["state"][0]},
+        base_url=HTTPS,
+    )
+    assert picker.status_code == 200
+    page = picker.get_data(as_text=True)
+    assert "Bäcker:in" in page
+    picker_token = page.split('name="token" value="')[1].split('"')[0]
+
+    response = client.post("/lti/deep-link", data={"token": picker_token, "job_id": "3", "unit_id": "7"})
+
+    page = response.get_data(as_text=True)
+    assert f'action="{DEEP_LINK_RETURN_URL}"' in page
+    response_jwt = page.split('name="JWT" value="')[1].split('"')[0]
+    jwk = client.get("/lti/jwks").get_json()["keys"][0]
+    assert jwt.get_unverified_header(response_jwt)["kid"] == jwk["kid"]
+    claims = jwt.decode(response_jwt, JWK(**jwk).export_to_pem(), algorithms=["RS256"], audience=ISSUER)
+    assert claims["iss"] == CLIENT_ID
+    assert claims[lti.CLAIM + "message_type"] == "LtiDeepLinkingResponse"
+    assert claims[lti.DEPLOYMENT_ID_CLAIM] == DEPLOYMENT_ID
+    assert claims["https://purl.imsglobal.org/spec/lti-dl/claim/data"] == "opaque-lms-data"
+    (item,) = claims["https://purl.imsglobal.org/spec/lti-dl/claim/content_items"]
+    assert item["type"] == "ltiResourceLink"
+    assert item["url"] == f"{TOOL_URL}/lti/launch"
+    assert item["custom"] == {"job_id": "3", "unit_id": "7"}
+    assert item["lineItem"]["scoreMaximum"] == 100
+    assert b"Grace Hopper" not in state.config.database_path.read_bytes()

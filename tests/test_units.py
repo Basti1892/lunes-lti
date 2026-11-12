@@ -335,3 +335,141 @@ def test_lms_errors_are_logged_briefly():
         _error_response(400, "https://lms.example.org/token", '{"error": "invalid_client", "reason": "bad kid"}')
     )
     assert json_error == "400 https://lms.example.org/token: invalid_client bad kid"
+
+
+# Deep Linking (vocabulary set picker)
+
+from lunes_lti import cms, deep_linking  # noqa: E402
+
+CONTEXT = deep_linking.Context(
+    issuer="https://lms.example.org",
+    client_id="abc",
+    deployment_id="1",
+    return_url="https://lms.example.org/mod/lti/contentitem_return.php",
+    data='{"id":"42"}',
+)
+JOBS = [cms.Job(3, "Bäcker:in"), cms.Job(5, "Pflege")]
+UNITS = {3: [cms.Unit(7, "Organe", 6), cms.Unit(8, "Backformen", 1)], 5: []}
+
+
+def test_picker_token_round_trip_and_separation_from_session_tokens():
+    token = deep_linking.issue(SECRET, CONTEXT)
+    assert deep_linking.verify(SECRET, token) == CONTEXT
+    with pytest.raises(jwt.InvalidTokenError):
+        deep_linking.verify(SECRET, session_token.issue(SECRET, "launch-1", 60))
+    with pytest.raises(jwt.InvalidTokenError):
+        session_token.verify(SECRET, token)
+    with pytest.raises(jwt.ExpiredSignatureError):
+        deep_linking.verify(SECRET, deep_linking.issue(SECRET, CONTEXT, lifetime=-1))
+
+
+def test_resource_link_carries_the_set_and_a_line_item():
+    resource = deep_linking.resource_link("http://localhost:8080/lti/launch", 3, 7, "Organe").to_dict()
+    assert resource["type"] == "ltiResourceLink"
+    assert resource["url"] == "http://localhost:8080/lti/launch"
+    assert resource["title"] == "Organe"
+    assert resource["custom"] == {"job_id": "3", "unit_id": "7"}
+    assert resource["lineItem"] == {"scoreMaximum": 100, "label": "Organe"}
+
+
+def test_cms_lists(monkeypatch):
+    responses = {
+        "https://cms.example.org/api/v2/jobs": [
+            {"id": 5, "name": "pflege"},
+            {"id": 3, "name": "Bäcker:in"},
+            {"name": "ohne ID"},
+        ],
+        "https://cms.example.org/api/v2/jobs/3/units": [{"id": 7, "title": "Organe", "number_words": 6}],
+    }
+    monkeypatch.setattr(cms, "_get", lambda url: responses[url])
+    assert cms.list_jobs("https://cms.example.org/api/v2") == [cms.Job(3, "Bäcker:in"), cms.Job(5, "pflege")]
+    assert cms.list_units("https://cms.example.org/api/v2", 3) == [cms.Unit(7, "Organe", 6)]
+
+
+def test_cms_rejects_unexpected_answers(monkeypatch):
+    with pytest.raises(cms.CmsError):
+        cms._get("file:///etc/passwd")
+    monkeypatch.setattr(cms, "_get", lambda url: {"detail": "not found"})
+    with pytest.raises(cms.CmsError):
+        cms.list_jobs("https://cms.example.org/api/v2")
+
+
+@pytest.fixture
+def picker_app(tmp_path, monkeypatch):
+    monkeypatch.setattr(keys, "ensure_key_pair", lambda data_dir: ("unused", "unused"))
+    monkeypatch.setattr(keys, "ensure_token_secret", lambda data_dir: SECRET)
+    monkeypatch.setattr(cms, "list_jobs", lambda cms_url: JOBS)
+    monkeypatch.setattr(cms, "list_units", lambda cms_url, job_id: UNITS[job_id])
+    monkeypatch.setattr(deep_linking, "response_jwt", lambda tool_conf, public_key, context, resources: "signed-jwt")
+    return create_app(
+        Config(base_url="http://localhost:8080", data_dir=tmp_path / "data", cms_url="https://cms.example.org/api/v2")
+    )
+
+
+def _pick(app, **form):
+    return app.test_client().post("/lti/deep-link", data={"token": deep_linking.issue(SECRET, CONTEXT)} | form)
+
+
+def test_picker_lists_jobs_then_units(picker_app):
+    page = _pick(picker_app).get_data(as_text=True)
+    assert "Bäcker:in" in page and "Pflege" in page
+    assert "Organe" not in page
+
+    page = _pick(picker_app, job_id="3").get_data(as_text=True)
+    assert "Organe" in page and "6 Wörter" in page and "1 Wort<" in page
+    assert 'action="deep-link"' in page
+
+    assert "noch keine Vokabelsets" in _pick(picker_app, job_id="5").get_data(as_text=True)
+
+
+def test_picker_sends_the_chosen_set_back_to_the_lms(picker_app, monkeypatch):
+    sent = {}
+
+    def response_jwt(tool_conf, public_key, context, resources):
+        sent.update(context=context, resources=[resource.to_dict() for resource in resources])
+        return "signed-jwt"
+
+    monkeypatch.setattr(deep_linking, "response_jwt", response_jwt)
+    response = _pick(picker_app, job_id="3", unit_id="7")
+
+    page = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert f'action="{CONTEXT.return_url}"' in page
+    assert 'name="JWT" value="signed-jwt"' in page
+    assert sent["context"] == CONTEXT
+    assert sent["resources"][0]["custom"] == {"job_id": "3", "unit_id": "7"}
+    assert sent["resources"][0]["url"] == "http://localhost:8080/lti/launch"
+
+
+def test_picker_ignores_a_set_of_another_job(picker_app):
+    page = _pick(picker_app, job_id="3", unit_id="99").get_data(as_text=True)
+    assert "signed-jwt" not in page
+    assert "Organe" in page
+
+
+def test_picker_needs_a_valid_token(picker_app):
+    response = picker_app.test_client().post("/lti/deep-link", data={"token": "forged", "job_id": "3"})
+    assert response.status_code == 400
+    session = session_token.issue(SECRET, "launch-1", 60)
+    assert picker_app.test_client().post("/lti/deep-link", data={"token": session}).status_code == 400
+
+
+def test_picker_reports_missing_configuration_and_cms_errors(picker_app, app_without_keys, monkeypatch):
+    response = app_without_keys.test_client().post(
+        "/lti/deep-link", data={"token": deep_linking.issue(SECRET, CONTEXT)}
+    )
+    assert response.status_code == 500
+
+    def fail(cms_url):
+        raise cms.CmsError("down")
+
+    monkeypatch.setattr(cms, "list_jobs", fail)
+    assert _pick(picker_app).status_code == 502
+
+
+def test_load_config_reads_the_cms_url(tmp_path):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text('base_url = "http://localhost:8080"\ncms_url = "https://cms.example.org/api/v2/"\n')
+    assert load_config(config_file).cms_url == "https://cms.example.org/api/v2"
+    config_file.write_text('base_url = "http://localhost:8080"\n')
+    assert load_config(config_file).cms_url is None

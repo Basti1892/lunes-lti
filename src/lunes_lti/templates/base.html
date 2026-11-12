@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lunes</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 2rem;
+        max-width: 40rem;
+        color: #17375e;
+      }
+      label,
+      legend {
+        font-weight: 600;
+      }
+      select,
+      button {
+        font: inherit;
+        padding: 0.4rem 0.8rem;
+      }
+      fieldset {
+        border: 1px solid #c8d0dc;
+        border-radius: 6px;
+        margin: 1.5rem 0;
+      }
+      .unit {
+        display: flex;
+        gap: 0.5rem;
+        align-items: baseline;
+        padding: 0.3rem 0;
+      }
+      .words {
+        color: #5b616a;
+      }
+      button[type="submit"] {
+        background: #17375e;
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Lunes</h1>
+    {% block content %}{% endblock %}
+  </body>
+</html>

@@ -1,4 +1,4 @@
-"""LTI endpoints: OIDC login initiation, launch, JWKS."""
+"""LTI endpoints: OIDC login initiation, launch, Deep Linking picker, session, results, JWKS."""
 
 import html
 import json
@@ -10,7 +10,7 @@ import jwt
 from flask import Blueprint, current_app, jsonify, redirect, render_template, request
 from pylti1p3.exception import LtiException, LtiServiceException, OIDCException
 
-from . import grades, lti, session_token, storage
+from . import cms, deep_linking, grades, lti, session_token, storage
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +74,12 @@ def launch():
         logger.warning("LTI launch failed: %s", error)
         return _error("Der Start aus der Lernplattform ist fehlgeschlagen. Bitte starte die Aktivität erneut.")
 
+    if message_launch.is_deep_link_launch():
+        return _start_deep_linking(message_launch, launch_data)
     if not message_launch.is_resource_launch():
         return _error("Diese Art von Start wird noch nicht unterstützt.")
 
-    # Until Deep Linking exists, the vocabulary set comes from the custom parameters of the activity
+    # The vocabulary set comes from the custom parameters of the activity, set by Deep Linking (or by hand)
     custom = launch_data.get(lti.CUSTOM_CLAIM) or {}
     job_id = _positive_int(custom.get("job_id"))
     unit_id = _positive_int(custom.get("unit_id"))
@@ -106,6 +108,58 @@ def launch():
 
     # The token goes into the fragment: browsers do not send it to servers, so it does not end up in access logs
     return redirect(f"{state.config.base_url}/jobs/{job_id}/units/{unit_id}#lti_token={quote(token)}")
+
+
+def _start_deep_linking(message_launch, launch_data):
+    settings = launch_data.get(deep_linking.SETTINGS_CLAIM) or {}
+    return_url = _http_url(settings.get("deep_link_return_url"))
+    if return_url is None or deep_linking.RESOURCE_LINK_TYPE not in (settings.get("accept_types") or []):
+        logger.warning("Deep Linking request without return URL or without accepting LTI resource links")
+        return _error("Die Lernplattform erwartet einen Inhalt, den Lunes nicht anbietet.", status=422)
+    context = deep_linking.Context(
+        issuer=launch_data["iss"],
+        client_id=message_launch.get_client_id(),
+        deployment_id=launch_data[lti.DEPLOYMENT_ID_CLAIM],
+        return_url=return_url,
+        data=settings.get("data"),
+    )
+    return _picker(deep_linking.issue(_state().token_secret, context), job_id=None, unit_id=None)
+
+
+@bp.post("/deep-link")
+def deep_link():
+    """Steps of the vocabulary set picker: profession, then set. The chosen set goes back to the LMS."""
+    token = request.form.get("token", "")
+    try:
+        deep_linking.verify(_state().token_secret, token)
+    except jwt.InvalidTokenError:
+        return _error("Die Auswahl ist abgelaufen. Bitte öffne die Auswahl in der Lernplattform erneut.")
+    return _picker(
+        token, job_id=_positive_int(request.form.get("job_id")), unit_id=_positive_int(request.form.get("unit_id"))
+    )
+
+
+def _picker(token: str, job_id: int | None, unit_id: int | None):
+    state = _state()
+    if state.config.cms_url is None:
+        logger.warning("Deep Linking needs cms_url in the configuration")
+        return _error("Die Auswahl der Vokabelsets ist nicht eingerichtet (cms_url fehlt).", status=500)
+    try:
+        jobs = cms.list_jobs(state.config.cms_url)
+        job = next((job for job in jobs if job.id == job_id), None)
+        units = cms.list_units(state.config.cms_url, job.id) if job is not None else []
+    except cms.CmsError as error:
+        logger.warning("Vocabulary sets could not be loaded: %s", error)
+        return _error("Die Vokabelsets konnten gerade nicht geladen werden. Bitte versuche es später noch einmal.", 502)
+
+    unit = next((unit for unit in units if unit.id == unit_id), None)
+    if job is None or unit is None:
+        return render_template("picker.html", token=token, jobs=jobs, job=job, units=units)
+
+    context = deep_linking.verify(state.token_secret, token)
+    resource = deep_linking.resource_link(state.config.launch_url, job.id, unit.id, unit.title)
+    response_jwt = deep_linking.response_jwt(state.tool_conf, state.public_key, context, [resource])
+    return render_template("deep_link_response.html", return_url=context.return_url, jwt=response_jwt, unit=unit)
 
 
 @bp.get("/session")

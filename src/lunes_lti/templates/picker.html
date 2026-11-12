@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Vokabelset auswählen</h2>
+<p>Die Lernenden üben in der Aktivität nur dieses Set. Lunes überträgt das Ergebnis der Übung in die Bewertungen.</p>
+
+<form method="post" action="deep-link">
+  <input type="hidden" name="token" value="{{ token }}" />
+  <label for="job">Beruf</label>
+  <select id="job" name="job_id" onchange="this.form.submit()">
+    <option value="" {% if job is none %}selected{% endif %}>Bitte auswählen</option>
+    {% for item in jobs %}
+    <option value="{{ item.id }}" {% if job is not none and item.id == job.id %}selected{% endif %}>{{ item.name }}</option>
+    {% endfor %}
+  </select>
+  <noscript><button type="submit">Sets anzeigen</button></noscript>
+</form>
+
+{% if job is not none %}
+<form method="post" action="deep-link">
+  <input type="hidden" name="token" value="{{ token }}" />
+  <input type="hidden" name="job_id" value="{{ job.id }}" />
+  <fieldset>
+    <legend>Vokabelsets für {{ job.name }}</legend>
+    {% for unit in units %}
+    <div class="unit">
+      <input type="radio" id="unit-{{ unit.id }}" name="unit_id" value="{{ unit.id }}" required />
+      <label for="unit-{{ unit.id }}">{{ unit.title }}</label>
+      <span class="words">{{ unit.number_words }} {{ "Wort" if unit.number_words == 1 else "Wörter" }}</span>
+    </div>
+    {% else %}
+    <p>Für diesen Beruf gibt es noch keine Vokabelsets.</p>
+    {% endfor %}
+  </fieldset>
+  {% if units %}<button type="submit">Auswählen</button>{% endif %}
+</form>
+{% endif %}
+{% endblock %}

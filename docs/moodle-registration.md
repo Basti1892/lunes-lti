@@ -22,7 +22,8 @@ Site administration → Plugins → Activity modules → External tool → **Man
 | Custom parameters               | empty (set per activity)                                                               |
 | Tool configuration usage        | Show in activity chooser and as a preconfigured tool                                   |
 | Default launch container        | Embed, without blocks (fallback: New window, see "Cookies" below)                      |
-| Supports Deep Linking           | off (comes later)                                                                      |
+| Supports Deep Linking           | on                                                                                     |
+| Content Selection URL           | `<base>/lti/launch`                                                                    |
 
 **Services:**
 
@@ -81,8 +82,24 @@ Restart the service after changing the file.
 
 ## 3. Add an activity
 
-In a course: Add an activity or resource → **Lunes** (or External tool → Preconfigured tool: Lunes) → **Show more…**
-→ **Custom parameters**:
+In a course: Add an activity or resource → **Lunes** (or External tool → Preconfigured tool: Lunes) → **Select
+content**. Lunes opens a picker: choose the profession, then the vocabulary set, then **Auswählen**. Moodle fills in the
+activity name and the custom parameters (`job_id`, `unit_id`) and creates the grade item (type "Point", maximum 100).
+Save the activity.
+
+The picker reads the professions and sets from the CMS in `cms_url` (`config.toml`). It must be the CMS the web app
+uses, because the IDs differ between the CMS instances: the test CMS for the development server (`yarn web`).
+
+A launch redirects to `<base>/jobs/<job ID>/units/<unit ID>#lti_token=…`.
+
+**Grade:** Lunes sends the words correct on the first try out of all words of the word choice exercise; Moodle scales
+that to the maximum grade (6 of 8 → 75). Every finished attempt is sent, the gradebook shows the latest.
+
+After switching on the grade service or "Accept grades", launch the activity again: only new launches carry the AGS
+claim. Results of older launches are answered with `409 not_graded`.
+
+**Without Deep Linking** (or for activities created before): set the custom parameters by hand under **Show more…** →
+**Custom parameters**:
 
 ```
 job_id=<job ID>
@@ -90,16 +107,7 @@ unit_id=<unit ID>
 ```
 
 The IDs are in the URL of the web app: open the vocabulary set there, the URL is `/jobs/<job ID>/units/<unit ID>`.
-Deep Linking will replace this step with a picker.
-
-A launch redirects to `<base>/jobs/<job ID>/units/<unit ID>#lti_token=…`.
-
-**Grade** (same form, section "Grade"): type "Point", maximum grade e.g. 100. Lunes sends the words correct on the
-first try out of all words of the word choice exercise; Moodle scales that to the maximum grade (6 of 8 → 75). Every
-finished attempt is sent, the gradebook shows the latest.
-
-After switching on the grade service or "Accept grades", launch the activity again: only new launches carry the AGS
-claim. Results of older launches are answered with `409 not_graded`.
+Set the grade (type "Point", maximum e.g. 100) in the section "Grade" of the same form.
 
 ## Cookies in the iframe
 

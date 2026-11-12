@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<p>„{{ unit.title }}“ wird in die Lernplattform übernommen …</p>
+<form id="deep-link-response" method="post" action="{{ return_url }}">
+  <input type="hidden" name="JWT" value="{{ jwt }}" />
+  <noscript><button type="submit">Weiter zur Lernplattform</button></noscript>
+</form>
+<script>
+  document.getElementById("deep-link-response").submit();
+</script>
+{% endblock %}
